@@ -9,6 +9,7 @@ use Compress::Zlib;
 use LWP::UserAgent;
 use XML::Simple qw(XMLin);
 use Cache::File;
+use DateTime;
 use DateTime::Format::HTTP;
 use CPAN::DistnameInfo;
 use YAML::XS;
@@ -19,7 +20,7 @@ use CPAN::Source::Package;
 
 use constant { DEBUG => $ENV{DEBUG} };
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 
 # options ...
@@ -68,6 +69,16 @@ has mailrc =>
     is => 'rw',
     isa => 'HashRef';
 
+has stamp => 
+    is => 'rw',
+    lazy => 1,
+    default => sub { 
+        my $self = shift;
+        my $content = $self->fetch_stamp;
+        my ( $ts , $date ) = split /\s/,$content;
+        return DateTime->from_epoch( epoch => $ts );
+    };
+
 has mirrors =>
     is => 'rw',
     isa => 'HashRef',
@@ -76,11 +87,10 @@ has mirrors =>
         my $self = shift;
         return unless $self->mirror;
         # get 07mirror.json
-        my $json = $self->http_get( $self->mirror . '/modules/07mirror.json' );
+        my $json = $self->fetch_mirrors;
         my $data = decode_json( $json );
         return $data;
     };
-
 
 sub debug { 
     say "[DEBUG] " ,@_ if DEBUG;
@@ -111,7 +121,7 @@ sub prepare_authors {
 
     debug "Prepare authors data...";
 
-    my $xml = $self->http_get( $self->mirror . '/authors/00whois.xml');
+    my $xml = $self->fetch_whois;
 
     debug "Parsing authors data...";
 
@@ -123,7 +133,7 @@ sub prepare_authors {
 sub prepare_mailrc {
     my $self = shift;
     debug "Prepare mailrc data...";
-    my $mailrc_txt = _decode_gzip( $self->http_get( $self->mirror . '/authors/01mailrc.txt.gz') );
+    my $mailrc_txt = _decode_gzip($self->fetch_mailrc);
     $self->mailrc( $self->parse_mailrc( $mailrc_txt ) );
 }
 
@@ -132,7 +142,7 @@ sub prepare_package_data {
 
     debug "Prepare pacakge data...";
 
-    my $content = _decode_gzip( $self->http_get( $self->mirror . '/modules/02packages.details.txt.gz' ) );
+    my $content = _decode_gzip( $self->fetch_package_data );
 
     my @lines = split /\n/,$content;
 
@@ -208,21 +218,9 @@ sub prepare_package_data {
 
 sub prepare_modlist {
     my $self = shift;
-
     debug "Prepare modlist data...";
-    my $modlist_txt = _decode_gzip( $self->http_get( $self->mirror . '/modules/03modlist.data.gz' ));
-
+    my $modlist_txt = _decode_gzip( $self->fetch_modlist_data );
     $self->modlist( $self->parse_modlist( $modlist_txt ) );
-}
-
-
-sub fetch_recent {
-    my ($self,$period) = @_;
-    $period ||= '1d';
-
-    # http://search.cpan.org/CPAN/RECENT-1M.json
-    # http://ftp.nara.wide.ad.jp/pub/CPAN/RECENT-1M.json
-    return $self->http_get( $self->mirror . '/RECENT-'. $period .'.json' );
 }
 
 sub recent {
@@ -257,12 +255,75 @@ sub parse_mailrc {
     return \%result;
 }
 
+
+sub purge_cache {
+    my $self = shift;
+    $self->cache->purge;
+}
+
+sub fetch_stamp {
+    my $self = shift;
+    my $content = $self->http_get( $self->mirror . '/modules/02STAMP' );
+    return $content;
+}
+
+sub fetch_mirrors {
+    my $self = shift;
+    return $self->http_get( $self->mirror . '/modules/07mirror.json' );
+}
+
+sub fetch_mailrc {
+    my $self = shift;
+    return $self->http_get( $self->mirror . '/authors/01mailrc.txt.gz');
+}
+
+sub fetch_package_data {
+    my $self = shift;
+    return $self->http_get( $self->mirror . '/modules/02packages.details.txt.gz' );
+}
+
+sub fetch_modlist_data {
+    my $self = shift;
+    return $self->http_get( $self->mirror . '/modules/03modlist.data.gz' )
+}
+
+sub fetch_whois {
+    my $self = shift;
+    return $self->http_get( $self->mirror . '/authors/00whois.xml');
+}
+
+sub fetch_module_rss { 
+    my $self = shift;
+    my $rss_xml = $self->http_get( $self->mirror . '/modules/01modules.mtime.rss' );
+    return $rss_xml;
+}
+
+sub fetch_recent {
+    my ($self,$period) = @_;
+    $period ||= '1d';
+
+    # http://search.cpan.org/CPAN/RECENT-1M.json
+    # http://ftp.nara.wide.ad.jp/pub/CPAN/RECENT-1M.json
+    return $self->http_get( $self->mirror . '/RECENT-'. $period .'.json' );
+}
+
 sub module_source_path {
     my ($self,$d) = ($_[0], $_[1]);
     return undef unless $d->distvname;
     return ( $self->source_mirror . '/src/' . $d->cpanid . '/' . $d->distvname );
 }
 
+
+sub author {
+    my ($self,$pause_id) = @_;
+    return $self->authors->{ $pause_id };
+}
+
+# return package obj
+sub package {
+    my ($self,$pkgname) = @_;
+    return $self->package_data->{packages}->{ $pkgname };
+}
 
 # return dist
 sub dist { 
@@ -369,41 +430,28 @@ The distribution info is from L<CPAN::DistnameInfo>.
     my $readme = $dist->fetch_readme;
     my $changes = $dist->fetch_changes;
 
-=head1 METHODS
 
-=head2 new( OPTIONS )
+    my $pkg = $source->package( 'Moose' );
+    my $pm_content = $pkg->fetch_pm();
 
-=head2 prepare_authors 
 
-=head2 prepare_mailrc
-
-=head2 prepare_modlist
-
-Download 03modlist.data.gz and parse it.
-
-=head2 prepare_package_data
-
-Download 02packages.details.gz and parse it.
-
-=head2 module_source_path
-
-Return full-qualified source path. built from source mirror, the default source mirror is L<http://cpansearch.perl.org>.
-
-=head2 http_get
-
-Use L<LWP::UserAgent> to fetch content.
-
-=head2 new_dist
-
-Convert L<CPAN::DistnameInfo> into L<CPAN::Source::Dist>.
+    my $mirror_server_timestamp = $source->stamp;  # DateTime object
 
 =head1 ACCESSORS
 
 =for 4
 
+=item authors
+
+Which is a hashref, contains:
+
+    {
+        {pauseId} => { ... }
+    }
+
 =item package_data
 
-which is a hashref, contains:
+Which is a hashref, contains:
 
     { 
         meta => { 
@@ -426,8 +474,67 @@ which is a hashref, contains:
 
 =back
 
+=head1 METHODS
+
+=head2 new( OPTIONS )
 
 
+=head2 prepare_authors
+
+=head2 prepare_mailrc
+
+=head2 prepare_modlist
+
+Download 03modlist.data.gz and parse it.
+
+=head2 prepare_package_data
+
+Download 02packages.details.gz and parse it.
+
+=head2 module_source_path
+
+Return full-qualified source path. built from source mirror, the default source mirror is L<http://cpansearch.perl.org>.
+
+=head2 mirrors 
+
+Return mirror info from mirror site. (07mirrors.json)
+
+=head2 fetch_whois
+
+=head2 fetch_mailrc
+
+=head2 fetch_package_data
+
+=head2 fetch_modlist_data
+
+=head2 fetch_mirrors
+
+=head2 fetch_module_rss
+
+Return modules rss, from {Mirror}/modules/01modules.mtime.rss
+
+=head2 fetch_recent( $period )
+
+Fetch recent updated modules,
+
+    my $list = $source->fetch_recent( '1d' );
+    my $list = $source->fetch_recent( '1M' );
+
+=head2 dist( $name )
+
+return L<CPAN::Source::Dist> object.
+
+=head2 http_get
+
+Use L<LWP::UserAgent> to fetch content.
+
+=head2 new_dist
+
+Convert L<CPAN::DistnameInfo> into L<CPAN::Source::Dist>.
+
+=head2 purge_cache 
+
+Purge cache.
 
 =head1 AUTHOR
 
