@@ -5,6 +5,7 @@ use base qw(Class::Accessor::Fast::XS);
 __PACKAGE__->mk_accessors(qw(
     name 
     version_name 
+    package_name
     version 
     maturity 
     filename 
@@ -18,27 +19,6 @@ use JSON::XS;
 use YAML::XS;
 use URI;
 use overload '""' => \&to_string;
-
-# use Mouse;
-# has name => is => 'rw', isa => 'Str';
-# 
-# has version_name => is => 'rw';
-# 
-# has version => is => 'rw', isa => 'Str';
-# 
-# has maturity => is => 'rw';
-# 
-# has filename => is => 'rw';
-# 
-# has cpanid => is => 'rw';
-# 
-# has extension => is => 'rw';
-# 
-# has pathname => is => 'rw';
-# 
-# has source_path => is => 'rw';
-# 
-# has _parent => is => 'rw', isa => 'CPAN::Source';
 
 # CPAN::DistnameInfo compatible
 sub dist { $_[0]->name; }
@@ -96,9 +76,7 @@ sub data {
 }
 
 sub to_string { 
-    my $self = shift;
-    my $data = $self->data();
-    return encode_json( $data );
+    return encode_json( $_[0]->data );
 }
 
 1;

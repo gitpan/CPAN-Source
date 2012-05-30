@@ -38,4 +38,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://git.corneltek.com/perl/CPAN-Source.git
-version: 0.03
+version: 0.04
